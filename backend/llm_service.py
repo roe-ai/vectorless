@@ -261,11 +261,7 @@ class LLMService:
         except Exception as e:
             chunk_time = time.time() - chunk_start
             print(f"    ❌ Chunk {chunk_index + 1} failed in {chunk_time:.2f}s: {e}")
-            # Fallback: include first page of chunk
-            if chunk:
-                first_page = chunk[0].copy()
-                first_page["source_document"] = filename
-                return [first_page], 0.0
+            # Return empty result - better than returning irrelevant pages
             return [], 0.0
 
     async def generate_answer_stream(
