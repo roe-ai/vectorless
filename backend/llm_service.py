@@ -1,7 +1,8 @@
 import asyncio
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from openai import AsyncOpenAI
+from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 import json
 
@@ -16,12 +17,61 @@ class LLMService:
             self.client = None
         else:
             self.client = AsyncOpenAI(api_key=api_key)
+        
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+        self.anthropic_client = AsyncAnthropic(api_key=anthropic_key) if anthropic_key else None
+        
         self.model = "gpt-5-mini"
 
         self.pricing = {
             "gpt-5": {"input": 1.25, "output": 10.0},
             "gpt-5-mini": {"input": 0.25, "output": 2.0},
+            "claude-haiku-4.5": {"input": 0.80, "output": 4.0},
         }
+
+        self.model_to_provider = {
+            "gpt-5-mini": "openai",
+            "gpt-5": "openai",
+            "claude-haiku-4.5": "anthropic",
+        }
+
+        self.model_ids = {
+            "claude-haiku-4.5": "claude-haiku-4-5-20251001",
+        }
+
+    def get_default_model(self) -> Optional[str]:
+        if self.client:
+            return "gpt-5-mini"
+        if self.anthropic_client:
+            return "claude-haiku-4.5"
+        return None
+
+    def list_available_models(self) -> List[Dict[str, Any]]:
+        models = []
+        default_model = self.get_default_model()
+        
+        if self.client:
+            models.extend([
+                {"id": "gpt-5-mini", "label": "GPT-5 Mini", "description": "OpenAI • Faster responses, lower cost", "provider": "openai", "pricing": self.pricing["gpt-5-mini"], "is_default": "gpt-5-mini" == default_model},
+                {"id": "gpt-5", "label": "GPT-5", "description": "OpenAI • Highest quality, highest cost", "provider": "openai", "pricing": self.pricing["gpt-5"], "is_default": "gpt-5" == default_model},
+            ])
+        
+        if self.anthropic_client:
+            models.append({"id": "claude-haiku-4.5", "label": "Claude 4.5 Haiku", "description": "Anthropic • Balanced quality and price", "provider": "anthropic", "pricing": self.pricing["claude-haiku-4.5"], "is_default": "claude-haiku-4.5" == default_model})
+        
+        return models
+
+    def _resolve_model(self, requested_model: Optional[str]) -> str:
+        if requested_model:
+            provider = self.model_to_provider.get(requested_model)
+            if provider == "openai" and self.client:
+                return requested_model
+            elif provider == "anthropic" and self.anthropic_client:
+                return requested_model
+        default = self.get_default_model()
+        if default:
+            return default
+        raise RuntimeError("No LLM providers configured")
 
     def calculate_cost(self, usage_data, model="gpt-5-mini"):
         print(usage_data)
@@ -29,11 +79,18 @@ class LLMService:
         if not usage_data or model not in self.pricing:
             return 0.0
 
-        input_tokens = usage_data.prompt_tokens
-        output_tokens = usage_data.completion_tokens
+        # Handle both OpenAI and Anthropic formats
+        if hasattr(usage_data, "prompt_tokens"):
+            input_tokens = usage_data.prompt_tokens
+            output_tokens = usage_data.completion_tokens
+        elif hasattr(usage_data, "input_tokens"):
+            input_tokens = usage_data.input_tokens
+            output_tokens = usage_data.output_tokens
+        else:
+            return 0.0
 
-        input_cost = (input_tokens / 1_000_000 * 1.0) * self.pricing[model]["input"]
-        output_cost = (output_tokens / 1_000_000 * 1.0) * self.pricing[model]["output"]
+        input_cost = (input_tokens / 1_000_000) * self.pricing[model]["input"]
+        output_cost = (output_tokens / 1_000_000) * self.pricing[model]["output"]
 
         return input_cost + output_cost
 
@@ -43,10 +100,12 @@ class LLMService:
         documents: List[Dict[str, Any]],
         question: str,
         chat_history: List[Dict[str, Any]] = None,
+        model: Optional[str] = None,
     ) -> tuple[List[Dict[str, Any]], float]:
         """
         Select relevant documents based on description, question, and chat history
         """
+        resolved_model = self._resolve_model(model)
 
         doc_summaries = []
         for doc in documents:
@@ -100,13 +159,25 @@ class LLMService:
             """
 
         try:
-            response = await self.client.chat.completions.create(
-                model="gpt-5",
-                messages=[{"role": "user", "content": prompt}],
-            )
+            if self.model_to_provider[resolved_model] == "openai":
+                response = await self.client.chat.completions.create(
+                    model=resolved_model,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                content = response.choices[0].message.content
+                usage = response.usage
+            else:  # anthropic
+                response = await self.anthropic_client.messages.create(
+                    model=self.model_ids.get(resolved_model, resolved_model),
+                    max_tokens=4096,
+                    temperature=0,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                content = "".join(block.text for block in response.content if hasattr(block, "text"))
+                usage = response.usage
 
-            selected_ids = json.loads(response.choices[0].message.content)
-            cost = self.calculate_cost(response.usage, self.model)
+            selected_ids = json.loads(content)
+            cost = self.calculate_cost(usage, resolved_model)
 
             # Return full document objects for selected IDs
             selected_docs = []
@@ -127,10 +198,13 @@ class LLMService:
         question: str,
         filename: str,
         chat_history: List[Dict[str, Any]] = None,
+        model: Optional[str] = None,
     ) -> tuple[List[Dict[str, Any]], float]:
         print("find_relevant_pages")
         print(filename)
         """Find relevant pages by processing 20 pages at a time in parallel"""
+
+        resolved_model = self._resolve_model(model)
 
         # Create chunks of 20 pages
         chunks = []
@@ -142,7 +216,7 @@ class LLMService:
         chunk_tasks = []
         for chunk_index, chunk in enumerate(chunks):
             task = self._process_page_chunk(
-                chunk, question, filename, chunk_index, chat_history
+                chunk, question, filename, chunk_index, chat_history, resolved_model
             )
             chunk_tasks.append(task)
 
@@ -173,6 +247,7 @@ class LLMService:
         filename: str,
         chunk_index: int,
         chat_history: List[Dict[str, Any]] = None,
+        model: str = "",
     ) -> tuple[List[Dict[str, Any]], float]:
         """Process a single chunk of pages"""
         import time
@@ -234,13 +309,25 @@ class LLMService:
             """
 
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-            )
+            if self.model_to_provider[model] == "openai":
+                response = await self.client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                response_text = response.choices[0].message.content
+                usage = response.usage
+            else:  # anthropic
+                response = await self.anthropic_client.messages.create(
+                    model=self.model_ids.get(model, model),
+                    max_tokens=4096,
+                    temperature=0,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                response_text = "".join(block.text for block in response.content if hasattr(block, "text"))
+                usage = response.usage
 
-            relevant_page_numbers = json.loads(response.choices[0].message.content)
-            cost = self.calculate_cost(response.usage, model=self.model)
+            relevant_page_numbers = json.loads(response_text)
+            cost = self.calculate_cost(usage, model=model)
 
             # Add full page data for relevant pages
             relevant_pages = []
@@ -273,7 +360,7 @@ class LLMService:
         relevant_pages: List[Dict[str, Any]],
         question: str,
         chat_history: List[Dict[str, Any]] = None,
-        model: str = "gpt-5-mini",
+        model: Optional[str] = None,
     ):
         """Generate final answer using all relevant pages with streaming"""
 
@@ -284,6 +371,8 @@ class LLMService:
             }
             yield {"type": "cost", "cost": 0.0}
             return
+
+        resolved_model = self._resolve_model(model)
 
         # Format chat history for conversational context
         history_context = ""
@@ -327,25 +416,47 @@ class LLMService:
             """
 
         try:
-            stream = await self.client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                stream=True,
-                stream_options={"include_usage": True},
-            )
+            if self.model_to_provider[resolved_model] == "openai":
+                stream = await self.client.chat.completions.create(
+                    model=resolved_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    stream=True,
+                    stream_options={"include_usage": True},
+                )
 
-            async for chunk in stream:
-                if chunk.usage:
-                    yield {
-                        "type": "cost",
-                        "cost": self.calculate_cost(chunk.usage, model=model),
-                    }
-                if len(chunk.choices) > 0:
-                    if chunk.choices[0].delta.content is not None:
+                async for chunk in stream:
+                    if chunk.usage:
+                        yield {
+                            "type": "cost",
+                            "cost": self.calculate_cost(chunk.usage, model=resolved_model),
+                        }
+                    if len(chunk.choices) > 0:
+                        if chunk.choices[0].delta.content is not None:
+                            yield {
+                                "type": "content",
+                                "content": chunk.choices[0].delta.content,
+                            }
+
+            else:  # anthropic
+                response = await self.anthropic_client.messages.create(
+                    model=self.model_ids.get(resolved_model, resolved_model),
+                    max_tokens=4096,
+                    temperature=0,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+
+                for block in response.content:
+                    if hasattr(block, "text") and block.text:
                         yield {
                             "type": "content",
-                            "content": chunk.choices[0].delta.content,
+                            "content": block.text,
                         }
+
+                if response.usage:
+                    yield {
+                        "type": "cost",
+                        "cost": self.calculate_cost(response.usage, model=resolved_model),
+                    }
 
         except Exception as e:
             yield {"type": "content", "content": f"Error generating answer: {str(e)}"}

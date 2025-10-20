@@ -39,6 +39,15 @@ pdf_processor = PDFProcessor()
 llm_service = LLMService()
 
 
+@app.get("/models")
+async def list_models():
+    """Return available language models based on configured providers"""
+    return {
+        "default_model": llm_service.get_default_model(),
+        "models": llm_service.list_available_models(),
+    }
+
+
 @app.post("/upload", response_model=UploadResponse)
 async def upload_documents(
     files: List[UploadFile] = File(...), description: str = Form(...)
@@ -145,6 +154,7 @@ async def chat_stream(request: ChatRequest):
                 documents_dict,
                 request.question,
                 request.chat_history,
+                request.model,
             )
             total_cost += step1_cost
             step1_time = time.time() - step1_start
@@ -183,6 +193,7 @@ async def chat_stream(request: ChatRequest):
                     request.question,
                     doc["filename"],
                     request.chat_history,
+                    request.model,
                 )
 
             # Create tasks for all documents

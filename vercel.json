@@ -24,6 +24,10 @@
             "dest": "/api/chat/stream.py"
         },
         {
+            "src": "/api/models",
+            "dest": "/api/models/index.py"
+        },
+        {
             "src": "/api/health",
             "dest": "/api/health.py"
         },
