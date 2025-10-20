@@ -163,7 +163,6 @@ class LLMService:
                 response = await self.client.chat.completions.create(
                     model=resolved_model,
                     messages=[{"role": "user", "content": prompt}],
-                    temperature=0,
                 )
                 content = response.choices[0].message.content
                 usage = response.usage
@@ -314,7 +313,6 @@ class LLMService:
                 response = await self.client.chat.completions.create(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
-                    temperature=0,
                 )
                 response_text = response.choices[0].message.content
                 usage = response.usage
@@ -424,7 +422,6 @@ class LLMService:
                     messages=[{"role": "user", "content": prompt}],
                     stream=True,
                     stream_options={"include_usage": True},
-                    temperature=0,
                 )
 
                 async for chunk in stream:
