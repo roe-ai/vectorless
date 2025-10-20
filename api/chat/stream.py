@@ -93,6 +93,7 @@ class handler(BaseHTTPRequestHandler):
                 documents_dict,
                 request.question,
                 request.chat_history,
+                request.model,
             )
             total_cost += step1_cost
             step1_time = time.time() - step1_start
@@ -135,6 +136,7 @@ class handler(BaseHTTPRequestHandler):
                     request.question,
                     doc["filename"],
                     request.chat_history,
+                    request.model,
                 )
 
             # Create tasks for all documents

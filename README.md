@@ -110,6 +110,7 @@ Create `.env.local`:
 ```bash
 # Only needed for local development
 OPENAI_API_KEY=your_openai_api_key_here
+ANTHROPIC_API_KEY=your_anthropic_key_here  # Optional
 ```
 
 ### 3. Run Locally
@@ -121,7 +122,7 @@ Visit http://localhost:3000
 ### 4. Deploy to Vercel
 1. Push to GitHub
 2. Connect to Vercel
-3. Set environment variable: `OPENAI_API_KEY=your_key`
+3. Set `OPENAI_API_KEY=your_key` (and optionally `ANTHROPIC_API_KEY=your_key`)
 4. Deploy! ✅
 
 ## 📖 How to Use

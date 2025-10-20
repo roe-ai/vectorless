@@ -56,6 +56,14 @@ interface StatelessChatSectionProps {
   onUpdateDescription: (description: string) => void;
 }
 
+interface AvailableModel {
+  id: string;
+  label: string;
+  description?: string;
+  provider: string;
+  is_default?: boolean;
+}
+
 export default function StatelessChatSection({ 
   documents, 
   description, 
@@ -67,7 +75,8 @@ export default function StatelessChatSection({
   const [currentQuestion, setCurrentQuestion] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showDocuments, setShowDocuments] = useState(true);
-  const [selectedModel, setSelectedModel] = useState<string>('gpt-5-mini');
+  const [selectedModel, setSelectedModel] = useState<string>('');
+  const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const [editedDescription, setEditedDescription] = useState('');
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
@@ -99,8 +108,27 @@ export default function StatelessChatSection({
     scrollToBottom();
   }, [messages]);
 
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const response = await fetch(`${config.apiBaseUrl}/models`);
+        if (response.ok) {
+          const data = await response.json();
+          const models = data.models || [];
+          setAvailableModels(models);
+          if (!selectedModel && data.default_model) {
+            setSelectedModel(data.default_model);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch models:', error);
+      }
+    };
+    fetchModels();
+  }, []);
+
   const handleSendMessage = async () => {
-    if (!currentQuestion.trim() || isLoading) return;
+    if (!currentQuestion.trim() || isLoading || !selectedModel) return;
 
     const question = currentQuestion;
     const userMessage: Message = {
@@ -879,32 +907,26 @@ export default function StatelessChatSection({
           <label className="block text-sm font-medium text-gray-700 mb-2">
             AI Model:
           </label>
-          <div className="flex space-x-4">
-            <label className="flex items-center space-x-2">
-              <input
-                type="radio"
-                name="model"
-                value="gpt-5-mini"
-                checked={selectedModel === 'gpt-5-mini'}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                disabled={isLoading}
-                className="text-blue-600 focus:ring-blue-500"
-              />
-              <span className="text-sm text-gray-700">GPT-5 Mini (Faster, Lower Cost)</span>
-            </label>
-            <label className="flex items-center space-x-2">
-              <input
-                type="radio"
-                name="model"
-                value="gpt-5"
-                checked={selectedModel === 'gpt-5'}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                disabled={isLoading}
-                className="text-blue-600 focus:ring-blue-500"
-              />
-              <span className="text-sm text-gray-700">GPT-5 (Higher Quality, Higher Cost)</span>
-            </label>
-          </div>
+          {availableModels.length === 0 ? (
+            <p className="text-sm text-gray-500">Loading models...</p>
+          ) : (
+            <div className="flex flex-wrap gap-3">
+              {availableModels.map(model => (
+                <label key={model.id} className="flex items-center space-x-2">
+                  <input
+                    type="radio"
+                    name="model"
+                    value={model.id}
+                    checked={selectedModel === model.id}
+                    onChange={(e) => setSelectedModel(e.target.value)}
+                    disabled={isLoading}
+                    className="text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-gray-700">{model.label}</span>
+                </label>
+              ))}
+            </div>
+          )}
         </div>
         
         <div className="flex space-x-2">
@@ -915,11 +937,11 @@ export default function StatelessChatSection({
             placeholder={documents.length === 0 ? "Upload documents first to start chatting..." : "Ask a question about your documents..."}
             className="flex-1 px-3 py-2 text-gray-700 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
             rows={2}
-            disabled={isLoading || documents.length === 0}
+            disabled={isLoading || documents.length === 0 || !selectedModel}
           />
           <button
             onClick={handleSendMessage}
-            disabled={!currentQuestion.trim() || isLoading || documents.length === 0}
+            disabled={!currentQuestion.trim() || isLoading || documents.length === 0 || !selectedModel}
             className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
           >
             Send
